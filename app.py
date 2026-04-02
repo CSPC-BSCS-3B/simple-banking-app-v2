@@ -39,23 +39,32 @@ def create_app():
     csrf.init_app(app)
 
     # Database configuration
+    # Priority:
+    # 1) DATABASE_URL
+    # 2) Full MySQL variable set
+    # 3) SQLite fallback (for Vercel/serverless and quick demos)
+    database_url = os.environ.get('DATABASE_URL')
 
-    # Construct the MySQL URL from individual environment variables if DATABASE_URL is not provided
-    # Use defaults to avoid None values
     mysql_user = os.environ.get('MYSQL_USER', '')
     mysql_password = os.environ.get('MYSQL_PASSWORD', '')
-    mysql_host = os.environ.get('MYSQL_HOST', '')  # Default to localhost if not set
-    mysql_port = os.environ.get('MYSQL_PORT', '3306')
+    mysql_host = os.environ.get('MYSQL_HOST', '')
+    mysql_port = str(os.environ.get('MYSQL_PORT', '3306'))
     mysql_database = os.environ.get('MYSQL_DATABASE', '')
-    
-    # Make sure all values are strings
-    mysql_port = str(mysql_port)
-    
-    # Check if required parameters are set
-    if not mysql_host or not mysql_user or not mysql_database:
-        print(f"WARNING: Missing database configuration. Host: {mysql_host}, User: {mysql_user}, Database: {mysql_database}")
-    
-    db_uri = f"mysql+pymysql://{mysql_user}:{mysql_password}@{mysql_host}:{mysql_port}/{mysql_database}"
+
+    if database_url:
+        db_uri = database_url
+    elif mysql_host and mysql_user and mysql_database:
+        db_uri = f"mysql+pymysql://{mysql_user}:{mysql_password}@{mysql_host}:{mysql_port}/{mysql_database}"
+    else:
+        if os.environ.get('VERCEL') == '1' or os.environ.get('VERCEL_ENV'):
+            db_uri = "sqlite:////tmp/simple_banking_vercel.db"
+        else:
+            db_uri = "sqlite:///simple_banking.db"
+        print(
+            "WARNING: MySQL configuration not found. "
+            "Falling back to SQLite for this environment."
+        )
+
     print(f"Database URI: {db_uri}")
     app.config['SQLALCHEMY_DATABASE_URI'] = db_uri
 
@@ -66,6 +75,48 @@ def create_app():
     login_manager.init_app(app)
     bcrypt.init_app(app)
     limiter.init_app(app)
+
+    # Ensure schema and baseline users exist on first boot of a fresh environment.
+    with app.app_context():
+        from models import User
+
+        db.create_all()
+        if User.query.count() == 0:
+            manager_user = User(
+                username="manager",
+                email="manager@bankapp.com",
+                account_number="0000000000",
+                status="active",
+                is_admin=True,
+                is_manager=True,
+                balance=1000.0,
+            )
+            manager_user.set_password("manager123")
+
+            admin_user = User(
+                username="admin",
+                email="admin@bankapp.com",
+                account_number="0000000001",
+                status="active",
+                is_admin=True,
+                is_manager=False,
+                balance=1000.0,
+            )
+            admin_user.set_password("admin123")
+
+            test_user = User(
+                username="testuser",
+                email="test@example.com",
+                account_number="1234567890",
+                status="active",
+                balance=1000.0,
+            )
+            test_user.set_password("testpassword")
+
+            db.session.add(manager_user)
+            db.session.add(admin_user)
+            db.session.add(test_user)
+            db.session.commit()
     
     # Add cache control headers to all responses
     @app.after_request
